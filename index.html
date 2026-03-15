@@ -180,6 +180,8 @@
     /* ──────────────────────────────────────────── QUIZ SCREEN */
     .progress-bar-wrap { width:100%; height:8px; background:rgba(255,255,255,.1); border-radius:99px; overflow:hidden; }
     .progress-bar-fill { height:100%; border-radius:99px; background:linear-gradient(90deg,#a78bfa,#f472b6); transition:width .4s ease; }
+    /* green tint for heatmap progress bar when showing mastery */
+    .progress-bar-fill.mastery { background:linear-gradient(90deg,#34d399,#a78bfa); }
 
     .quiz-meta { display:flex; justify-content:space-between; align-items:center; width:100%; font-size:.9rem; font-weight:700; color:var(--text-muted); }
     .quiz-meta .score-badge {
@@ -305,6 +307,15 @@
       cursor:default;
     }
     .hm-cell.hm-inactive { opacity:0.25; }
+    .hm-cell.hm-current {
+      outline:2px solid var(--accent1);
+      outline-offset:-1px;
+      animation: pulse-cell 1s ease-in-out infinite alternate;
+    }
+    @keyframes pulse-cell {
+      from { outline-color: var(--accent1); }
+      to   { outline-color: var(--accent2); }
+    }
     .hm-circle {
       border-radius:50%;
       position:absolute;
@@ -330,10 +341,29 @@
     }
     .hm-score-mini .detail-box { min-width:70px; }
 
+    /* live heatmap on quiz screen — compact */
+    .quiz-heatmap-card {
+      width:100%;
+      background: var(--card);
+      backdrop-filter: var(--card-blur);
+      -webkit-backdrop-filter: var(--card-blur);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 14px 16px 10px;
+      box-shadow: var(--shadow);
+    }
+    .quiz-heatmap-card .heatmap-section-title { font-size:.72rem; margin-bottom:6px; }
+    .quiz-heatmap-card .heatmap-grid { gap:2px; }
+    .quiz-heatmap-card .hm-lbl { font-size:.55rem; }
+    .quiz-heatmap-card .hm-legend { margin-top:6px; gap:8px; }
+    .quiz-heatmap-card .hm-legend-item { font-size:.65rem; }
+    .quiz-heatmap-card .hm-dot { width:7px; height:7px; }
+
     /* ── responsive ── */
     @media (max-width:400px) {
       .card { padding:20px 16px; }
       .table-grid { grid-template-columns:repeat(4,1fr); }
+      .quiz-heatmap-card { padding:10px 10px 8px; }
     }
   </style>
 </head>
@@ -366,7 +396,7 @@
   <div class="card">
     <h2>Settings</h2>
 
-    <div class="setting-row" style="margin-bottom:16px;">
+    <div id="numQRow" class="setting-row" style="margin-bottom:16px;">
       <label>Questions</label>
       <input type="range" id="numQRange" min="5" max="30" step="5" value="10" oninput="syncVal('numQRange','numQVal')">
       <span class="val" id="numQVal">10</span>
@@ -398,8 +428,21 @@
       <button class="mode-pill active" id="pill-classic"  onclick="setVizMode('classic')">📊 Score card</button>
       <button class="mode-pill"        id="pill-heatmap"  onclick="setVizMode('heatmap')">🔲 Heatmap</button>
     </div>
-    <div id="heatmapResetRow" style="display:none;margin-top:10px;">
-      <button class="btn-secondary" style="width:100%;padding:8px;font-size:.85rem;" onclick="resetMatrix()">↺ Reset heatmap data</button>
+
+    <!-- Heatmap threshold settings (visible only in heatmap mode) -->
+    <div id="heatmapSettings" style="display:none;margin-top:14px;">
+      <div style="margin-bottom:8px;font-weight:700;font-size:.85rem;color:var(--accent3);">Heatmap thresholds</div>
+      <div class="setting-row">
+        <label style="font-size:.85rem;">Fast (green) ≤</label>
+        <input type="range" id="threshGoodRange" min="1" max="15" step="1" value="4" oninput="syncVal('threshGoodRange','threshGoodVal')">
+        <span class="val" id="threshGoodVal" style="color:#34d399;">4s</span>
+      </div>
+      <div class="setting-row">
+        <label style="font-size:.85rem;">OK (amber) ≤</label>
+        <input type="range" id="threshOkRange" min="2" max="30" step="1" value="9" oninput="syncVal('threshOkRange','threshOkVal')">
+        <span class="val" id="threshOkVal" style="color:#fbbf24;">9s</span>
+      </div>
+      <button class="btn-secondary" style="width:100%;padding:8px;font-size:.85rem;margin-top:6px;" onclick="resetMatrix()">↺ Reset heatmap data</button>
     </div>
   </div>
 
@@ -416,6 +459,11 @@
       <span class="score-badge" id="scoreDisplay">⭐ 0</span>
     </div>
     <div class="progress-bar-wrap"><div class="progress-bar-fill" id="progressBar" style="width:0%"></div></div>
+  </div>
+
+  <!-- Live heatmap (shown during quiz in heatmap mode) -->
+  <div id="quizHeatmapCard" class="quiz-heatmap-card" style="display:none;">
+    <div class="heatmap-wrap" id="quizHeatmapDisplay"></div>
   </div>
 
   <div id="timerWrap" style="display:none;">
@@ -485,8 +533,9 @@
 
   <!-- Heatmap result -->
   <div id="heatmapResult" style="display:none;width:100%;">
+    <div class="result-emoji" id="hmResultEmoji">🏆</div>
     <div class="card">
-      <div class="hm-score-mini result-details" id="hmScoreMini" style="margin-bottom:16px;">
+      <div class="hm-score-mini result-details" style="margin-bottom:16px;">
         <div class="detail-box"><div class="num" id="hmResCorrect">10</div><div class="lbl">Correct</div></div>
         <div class="detail-box"><div class="num" id="hmResWrong">0</div><div class="lbl">Wrong</div></div>
         <div class="detail-box"><div class="num" id="hmResStreak">5</div><div class="lbl">Best streak</div></div>
@@ -506,12 +555,14 @@
    STATE
 ══════════════════════════════════════════════ */
 const cfg = {
-  tables:   new Set([1,2,3,4,5,6,7,8,9,10]),
-  numQ:     10,
-  timerOn:  false,
-  timerSec: 15,
-  mode:     'type',   // 'type' | 'mc'
-  vizMode:  'classic' // 'classic' | 'heatmap'
+  tables:     new Set([1,2,3,4,5,6,7,8,9,10]),
+  numQ:       10,
+  timerOn:    false,
+  timerSec:   15,
+  mode:       'type',    // 'type' | 'mc'
+  vizMode:    'classic', // 'classic' | 'heatmap'
+  threshGood: 4,         // seconds: ≤ this = green
+  threshOk:   9          // seconds: ≤ this = amber, above = red
 };
 
 let quiz = {};
@@ -535,6 +586,41 @@ function resetMatrix() {
   if (!confirm('Reset all heatmap progress? This cannot be undone.')) return;
   matrixData = {};
   saveMatrixData();
+}
+
+/* Helper: get all active heatmap pairs (tables 1-10 only) */
+function getActiveHeatmapPairs() {
+  const tables = [...cfg.tables].filter(t => t >= 1 && t <= 10);
+  const pairs = [];
+  for (const a of tables)
+    for (let b = 1; b <= 10; b++)
+      pairs.push({ a, b });
+  return pairs;
+}
+
+/* Check heatmap completion: all active cells must exist AND be green */
+function isHeatmapComplete() {
+  const pairs = getActiveHeatmapPairs();
+  if (pairs.length === 0) return true;
+  return pairs.every(p => {
+    const d = matrixData[`${p.a}_${p.b}`];
+    return d && d.time <= cfg.threshGood;
+  });
+}
+
+/* Count heatmap progress stats */
+function heatmapProgress() {
+  const pairs = getActiveHeatmapPairs();
+  const total = pairs.length;
+  let filled = 0, green = 0;
+  for (const p of pairs) {
+    const d = matrixData[`${p.a}_${p.b}`];
+    if (d) {
+      filled++;
+      if (d.time <= cfg.threshGood) green++;
+    }
+  }
+  return { total, filled, green };
 }
 
 /* ══════════════════════════════════════════════
@@ -575,9 +661,28 @@ function clearAll() {
 
 function syncVal(rangeId, valId) {
   const v = document.getElementById(rangeId).value;
-  document.getElementById(valId).textContent = v;
-  if (rangeId === 'numQRange') cfg.numQ = +v;
-  if (rangeId === 'timerRange') cfg.timerSec = +v;
+  if (rangeId === 'numQRange')       { cfg.numQ = +v; document.getElementById(valId).textContent = v; }
+  else if (rangeId === 'timerRange') { cfg.timerSec = +v; document.getElementById(valId).textContent = v; }
+  else if (rangeId === 'threshGoodRange') {
+    cfg.threshGood = +v;
+    document.getElementById(valId).textContent = v + 's';
+    // ensure OK threshold is at least good+1
+    if (cfg.threshOk <= cfg.threshGood) {
+      cfg.threshOk = cfg.threshGood + 1;
+      document.getElementById('threshOkRange').value = cfg.threshOk;
+      document.getElementById('threshOkVal').textContent = cfg.threshOk + 's';
+    }
+  }
+  else if (rangeId === 'threshOkRange') {
+    cfg.threshOk = +v;
+    document.getElementById(valId).textContent = v + 's';
+    // ensure OK threshold is above good
+    if (cfg.threshOk <= cfg.threshGood) {
+      cfg.threshOk = cfg.threshGood + 1;
+      document.getElementById('threshOkRange').value = cfg.threshOk;
+      document.getElementById('threshOkVal').textContent = cfg.threshOk + 's';
+    }
+  }
 }
 
 function toggleTimerRow() {
@@ -595,7 +700,9 @@ function setVizMode(m) {
   cfg.vizMode = m;
   document.getElementById('pill-classic').classList.toggle('active', m === 'classic');
   document.getElementById('pill-heatmap').classList.toggle('active', m === 'heatmap');
-  document.getElementById('heatmapResetRow').style.display = m === 'heatmap' ? 'block' : 'none';
+  document.getElementById('heatmapSettings').style.display = m === 'heatmap' ? 'block' : 'none';
+  // Hide question count in heatmap mode (runs until all green)
+  document.getElementById('numQRow').style.display = m === 'heatmap' ? 'none' : 'flex';
 }
 
 /* ══════════════════════════════════════════════
@@ -609,9 +716,7 @@ function genQuestion() {
 }
 
 // Smart question selection for heatmap mode.
-// Uses all 1-10 × 1-10 combinations (filtered to selected tables for the row).
 function genQuestionHeatmap() {
-  // Only use tables 1-10; ignore 11 & 12 since they're outside the matrix
   const activeTables = [...cfg.tables].filter(t => t >= 1 && t <= 10);
   if (activeTables.length === 0) return genQuestion(); // fallback
 
@@ -620,24 +725,22 @@ function genQuestionHeatmap() {
     for (let b = 1; b <= 10; b++)
       all.push({ a, b, answer: a * b });
 
-  // Exclude already asked in this session to avoid repeats until necessary
+  // Avoid repeating from this session where possible
   const notAskedYet = all.filter(p => !quiz.askedThisSession.has(`${p.a}_${p.b}`));
   const pool = notAskedYet.length > 0 ? notAskedYet : all;
 
-  // Find unseen combinations (never recorded in matrixData)
+  // Phase 1: pick randomly from combinations not yet in matrixData
   const unseen = pool.filter(p => !matrixData[`${p.a}_${p.b}`]);
-
   if (unseen.length > 0) {
-    // Phase 1: pick randomly from unseen
     return unseen[Math.floor(Math.random() * unseen.length)];
-  } else {
-    // Phase 2: pick the one with the worst (longest) time
-    return pool.reduce((worst, p) => {
-      const t  = matrixData[`${p.a}_${p.b}`]?.time ?? 0;
-      const wt = matrixData[`${worst.a}_${worst.b}`]?.time ?? 0;
-      return t > wt ? p : worst;
-    });
   }
+
+  // Phase 2: pick the one with the worst (longest) time from pool
+  return pool.reduce((worst, p) => {
+    const t  = matrixData[`${p.a}_${p.b}`]?.time ?? 0;
+    const wt = matrixData[`${worst.a}_${worst.b}`]?.time ?? 0;
+    return t > wt ? p : worst;
+  });
 }
 
 function genMCOptions(correct) {
@@ -654,7 +757,7 @@ function startQuiz() {
   quiz = {
     questions:          [],
     idx:                0,
-    totalQ:             cfg.numQ,
+    totalQ:             cfg.vizMode === 'heatmap' ? Infinity : cfg.numQ,
     score:              0,
     streak:             0,
     bestStreak:         0,
@@ -665,7 +768,6 @@ function startQuiz() {
   };
 
   if (cfg.vizMode === 'heatmap') {
-    // Generate first question on the fly
     const q = genQuestionHeatmap();
     quiz.questions.push(q);
     quiz.askedThisSession.add(`${q.a}_${q.b}`);
@@ -674,15 +776,36 @@ function startQuiz() {
   }
 
   showScreen('quiz');
+
+  // Show/hide the live heatmap
+  document.getElementById('quizHeatmapCard').style.display = cfg.vizMode === 'heatmap' ? 'block' : 'none';
+
+  if (cfg.vizMode === 'heatmap') {
+    renderMatrix(document.getElementById('quizHeatmapDisplay'), quiz.questions[0]);
+  }
+
   renderQuestion();
 }
 
 function renderQuestion() {
   const q = quiz.questions[quiz.idx];
-  const total = quiz.totalQ;
 
-  document.getElementById('questionCounter').textContent = `Question ${quiz.idx + 1} / ${total}`;
-  document.getElementById('progressBar').style.width = `${(quiz.idx / total) * 100}%`;
+  if (cfg.vizMode === 'heatmap') {
+    // Show progress: green / total
+    const prog = heatmapProgress();
+    document.getElementById('questionCounter').textContent = `${prog.green} / ${prog.total} mastered`;
+    const pct = prog.total > 0 ? (prog.green / prog.total) * 100 : 0;
+    const bar = document.getElementById('progressBar');
+    bar.style.width = `${pct}%`;
+    bar.className = 'progress-bar-fill mastery';
+  } else {
+    const total = quiz.totalQ;
+    document.getElementById('questionCounter').textContent = `Question ${quiz.idx + 1} / ${total}`;
+    const bar = document.getElementById('progressBar');
+    bar.style.width = `${(quiz.idx / total) * 100}%`;
+    bar.className = 'progress-bar-fill';
+  }
+
   document.getElementById('scoreDisplay').textContent = `⭐ ${quiz.score}`;
   document.getElementById('qA').textContent = q.a;
   document.getElementById('qB').textContent = q.b;
@@ -730,7 +853,6 @@ function handleMC(btn, chosen, correct) {
     onCorrect();
   } else {
     btn.classList.add('wrong');
-    // reveal correct
     document.querySelectorAll('.mc-btn').forEach(b => {
       if (+b.textContent === correct) b.classList.add('correct');
     });
@@ -774,6 +896,8 @@ function onCorrect() {
   const msgs = ['🎉 Correct!','✅ Nailed it!','🌟 Great job!','🔥 On fire!','💪 Yes!','🚀 Superb!'];
   showFeedback(msgs[Math.floor(Math.random()*msgs.length)], 'correct');
   playTone(true);
+  // Update live heatmap
+  if (cfg.vizMode === 'heatmap') updateQuizHeatmap();
 }
 
 function onWrong(correct) {
@@ -783,6 +907,8 @@ function onWrong(correct) {
   updateStreak();
   showFeedback(`❌ It was ${correct}`, 'wrong');
   playTone(false);
+  // Update live heatmap
+  if (cfg.vizMode === 'heatmap') updateQuizHeatmap();
 }
 
 function showFeedback(msg, type) {
@@ -796,17 +922,33 @@ function updateStreak() {
   el.textContent = quiz.streak >= 3 ? `🔥 ${quiz.streak} streak!` : '';
 }
 
+function updateQuizHeatmap() {
+  // Re-render the live heatmap (no current highlight — the answer was just given)
+  renderMatrix(document.getElementById('quizHeatmapDisplay'), null);
+}
+
 function nextQuestion() {
   quiz.idx++;
-  if (quiz.idx >= quiz.totalQ) {
-    showResult();
-  } else {
-    if (cfg.vizMode === 'heatmap') {
-      const q = genQuestionHeatmap();
-      quiz.questions[quiz.idx] = q;
-      quiz.askedThisSession.add(`${q.a}_${q.b}`);
+
+  if (cfg.vizMode === 'heatmap') {
+    // Check if all cells are green → done!
+    if (isHeatmapComplete()) {
+      showResult();
+      return;
     }
+    // Generate next question
+    const q = genQuestionHeatmap();
+    quiz.questions[quiz.idx] = q;
+    quiz.askedThisSession.add(`${q.a}_${q.b}`);
+    // Update live heatmap with current-question highlight
+    renderMatrix(document.getElementById('quizHeatmapDisplay'), q);
     renderQuestion();
+  } else {
+    if (quiz.idx >= quiz.totalQ) {
+      showResult();
+    } else {
+      renderQuestion();
+    }
   }
 }
 
@@ -822,7 +964,6 @@ function startTimer() {
   circle.style.strokeDashoffset = '0';
   num.textContent = remaining;
 
-  // kick after one frame so the CSS transition fires
   requestAnimationFrame(() => requestAnimationFrame(() => {
     circle.style.transition = `stroke-dashoffset ${cfg.timerSec}s linear`;
     circle.style.strokeDashoffset = circumference;
@@ -846,7 +987,6 @@ function stopTimer() {
 
 function timeUp() {
   const correct = quiz.questions[quiz.idx].answer;
-  // disable inputs
   if (cfg.mode === 'type') {
     document.getElementById('answerInput').disabled = true;
   } else {
@@ -868,13 +1008,15 @@ document.addEventListener('keydown', e => {
 
 /* ══════════════════════════════════════════════
    HEATMAP MATRIX RENDERER
+   currentQ: optional {a,b} to highlight as current question
 ══════════════════════════════════════════════ */
-function renderMatrix(container) {
+function renderMatrix(container, currentQ) {
   container.innerHTML = '';
 
   const title = document.createElement('div');
   title.className = 'heatmap-section-title';
-  title.textContent = 'Response time heatmap (smaller = faster)';
+  const prog = heatmapProgress();
+  title.textContent = `${prog.green} / ${prog.total} green — ${prog.filled} / ${prog.total} filled`;
   container.appendChild(title);
 
   const gridWrap = document.createElement('div');
@@ -883,8 +1025,8 @@ function renderMatrix(container) {
   const grid = document.createElement('div');
   grid.className = 'heatmap-grid';
 
-  // Corner + column headers (1-10)
-  grid.appendChild(Object.assign(document.createElement('div'), { className: 'hm-lbl' }));
+  // Corner + column headers
+  grid.appendChild(Object.assign(document.createElement('div'), { className: 'hm-lbl', textContent: '×' }));
   for (let b = 1; b <= 10; b++) {
     const h = document.createElement('div');
     h.className = 'hm-lbl';
@@ -892,9 +1034,7 @@ function renderMatrix(container) {
     grid.appendChild(h);
   }
 
-  // Rows: a = 1..10
   for (let a = 1; a <= 10; a++) {
-    // Row label
     const lbl = document.createElement('div');
     lbl.className = 'hm-lbl';
     lbl.textContent = a;
@@ -905,6 +1045,11 @@ function renderMatrix(container) {
       const isActive = cfg.tables.has(a);
       cell.className = 'hm-cell' + (isActive ? '' : ' hm-inactive');
 
+      // Highlight the current question cell
+      if (currentQ && currentQ.a === a && currentQ.b === b) {
+        cell.classList.add('hm-current');
+      }
+
       const key = `${a}_${b}`;
       const data = matrixData[key];
 
@@ -912,13 +1057,11 @@ function renderMatrix(container) {
         const circle = document.createElement('div');
         circle.className = 'hm-circle';
 
-        // Color based on response time
-        if (data.time <= 4)       circle.classList.add('hm-good');
-        else if (data.time <= 9)  circle.classList.add('hm-ok');
-        else                      circle.classList.add('hm-bad');
+        if (data.time <= cfg.threshGood)     circle.classList.add('hm-good');
+        else if (data.time <= cfg.threshOk)  circle.classList.add('hm-ok');
+        else                                  circle.classList.add('hm-bad');
 
-        // Size: linear scale, capped at 20s
-        // radius: 3px (instant) up to 18px (≥20s)
+        // Size: radius 3px (instant) up to 18px (≥20s)
         const capped = Math.min(data.time, 20);
         const radius = Math.max(3, 3 + capped * 0.75);
         circle.style.width  = `${radius * 2}px`;
@@ -941,9 +1084,9 @@ function renderMatrix(container) {
   const legend = document.createElement('div');
   legend.className = 'hm-legend';
   legend.innerHTML = `
-    <div class="hm-legend-item"><div class="hm-dot" style="background:#34d399"></div>Fast (&le;4s)</div>
-    <div class="hm-legend-item"><div class="hm-dot" style="background:#fbbf24"></div>OK (&le;9s)</div>
-    <div class="hm-legend-item"><div class="hm-dot" style="background:#f87171"></div>Slow (&gt;9s)</div>
+    <div class="hm-legend-item"><div class="hm-dot" style="background:#34d399"></div>Fast (&le;${cfg.threshGood}s)</div>
+    <div class="hm-legend-item"><div class="hm-dot" style="background:#fbbf24"></div>OK (&le;${cfg.threshOk}s)</div>
+    <div class="hm-legend-item"><div class="hm-dot" style="background:#f87171"></div>Slow (&gt;${cfg.threshOk}s)</div>
     <div class="hm-legend-item"><div class="hm-dot" style="background:rgba(255,255,255,0.2)"></div>Not yet</div>
   `;
   container.appendChild(legend);
@@ -964,11 +1107,12 @@ function showResult() {
   document.getElementById('screen-quiz').classList.remove('active');
   stopTimer();
   document.getElementById('timerWrap').style.display = 'none';
+  document.getElementById('quizHeatmapCard').style.display = 'none';
 
-  const pct = Math.round((quiz.score / quiz.totalQ) * 100);
+  const totalAnswered = quiz.score + quiz.wrong;
+  const pct = totalAnswered > 0 ? Math.round((quiz.score / totalAnswered) * 100) : 0;
 
   if (cfg.vizMode === 'heatmap') {
-    // Show heatmap result, hide classic
     document.getElementById('classicResult').style.display = 'none';
     document.getElementById('heatmapResult').style.display = 'block';
 
@@ -976,9 +1120,11 @@ function showResult() {
     document.getElementById('hmResWrong').textContent   = quiz.wrong;
     document.getElementById('hmResStreak').textContent  = quiz.bestStreak;
 
-    renderMatrix(document.getElementById('heatmapDisplay'));
+    // Completion message
+    document.getElementById('hmResultEmoji').textContent = isHeatmapComplete() ? '🏆' : '📊';
+
+    renderMatrix(document.getElementById('heatmapDisplay'), null);
   } else {
-    // Show classic result, hide heatmap
     document.getElementById('classicResult').style.display = 'flex';
     document.getElementById('heatmapResult').style.display = 'none';
 
@@ -990,7 +1136,6 @@ function showResult() {
     document.getElementById('resWrong').textContent    = quiz.wrong;
     document.getElementById('resStreak').textContent   = quiz.bestStreak;
 
-    // stars (out of 5)
     const starCount = Math.ceil((pct / 100) * 5);
     const starEls = document.querySelectorAll('.star');
     starEls.forEach((s, i) => {
@@ -1001,7 +1146,8 @@ function showResult() {
   }
 
   showScreen('result');
-  if (pct >= 80) launchConfetti();
+  if (cfg.vizMode === 'heatmap' && isHeatmapComplete()) launchConfetti();
+  else if (cfg.vizMode !== 'heatmap' && pct >= 80) launchConfetti();
 }
 
 /* ══════════════════════════════════════════════
